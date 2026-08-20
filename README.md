@@ -73,21 +73,30 @@ from there, so nothing in the engine changes.
 
 ```bash
 pip install -e '.[dev]'
-pytest                                    # 123 tests, offline
+pytest                                    # 143 tests, offline
 (cd tasks/calc_bug && npm test)           # watch the task fail on its own
 alg graph                                 # print the topology as mermaid
 ```
 
-Live runs need a model. Either provider works — the harness cannot tell them apart:
+Live runs need a model. Either provider works — the harness cannot tell them
+apart. Check the whole chain first; `doctor` makes one real model call, so a
+model that cannot emit tool calls is caught in seconds rather than an hour in:
 
 ```bash
+# a local model — no key, no cloud
+alg doctor --provider ollama --model qwen3:30b
+alg run tasks/calc_bug --provider ollama --model qwen3:30b --show-diff
+
+# or the API
 pip install -e '.[anthropic]'
 export ANTHROPIC_API_KEY=...
 alg run tasks/calc_bug --show-diff
-
-# or a local model, no key, no cloud
-alg run tasks/calc_bug --provider ollama --model gemma3:27b
 ```
+
+Local models are slower per call, so `--wall-clock` defaults to 3600s per repair
+attempt for Ollama against 600s for API providers. See
+[docs/04-local-model.md](docs/04-local-model.md) for the full walkthrough,
+including what each stop reason tells you to change.
 
 Then read what actually happened:
 
@@ -114,12 +123,13 @@ src/alg/
   agent.py        The wiring: baseline → repair → verify → report.
   tasks.py        TaskSpec: reads alg.task.json so the engine stays language-agnostic.
   llm/            Provider-neutral interface + Anthropic and Ollama adapters.
-  cli.py          alg run | graph | trace
+  doctor.py       Preflight: python, node, task, server, model, tool call.
+  cli.py          alg doctor | run | graph | trace
 tasks/calc_bug/   TypeScript stats module: two seeded defects, 11 tests, zero deps.
   alg.task.json   Test command, focus flag, source/test/search globs.
   src/stats.ts    The code under repair.
   test/           node:test suite — the specification, and off-limits to the agent.
-tests/            123 tests covering all three layers, no network required.
+tests/            143 tests covering all three layers, no network required.
   conftest.py     Fixtures + ScriptedLLM, the offline test double for a model.
   test_harness.py Jail, bounded execution, registry, fs tools
   test_patch.py   Diff parsing and application
@@ -127,6 +137,8 @@ tests/            123 tests covering all three layers, no network required.
   test_graph.py   Routing, cycles, checkpoints, resume
   test_tasks.py   Manifest loading and validation
   test_agent.py   The three layers end to end, plus the test-output parsers
+  test_ollama_wire.py  The Ollama adapter against a stub HTTP server
+  test_doctor.py  Preflight checks, including the ways a local setup fails
 docs/             One document per layer, plus the roadmap.
 ```
 
@@ -178,6 +190,7 @@ structure, and a definition of "solved" the agent cannot fake.**
 | [docs/01-harness.md](docs/01-harness.md) | What the model is allowed to do, see, and have recorded |
 | [docs/02-loop.md](docs/02-loop.md) | Why every exit from a cycle needs a name, and why evidence must be external |
 | [docs/03-graph.md](docs/03-graph.md) | Why retry, undo, and "what next" belong outside the loop |
+| [docs/04-local-model.md](docs/04-local-model.md) | Running it against Ollama, and reading the result |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Live runs, evals, and the port to LangGraph |
 
 The one line worth carrying out of each layer:

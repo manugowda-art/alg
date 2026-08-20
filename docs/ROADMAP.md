@@ -1,7 +1,8 @@
 # Roadmap
 
 Phase 1 is done: harness, loop, and graph built from scratch in Python, wired into
-one TypeScript use case, all exercised offline by 123 tests.
+one TypeScript use case, all exercised offline by 143 tests — including the Ollama
+adapter, against a stub server on a real socket.
 
 ## Phase 2 — run it for real
 
@@ -10,10 +11,11 @@ Nothing here is built yet; the point of phase 1 was to make phase 2 measurable.
 1. **A live run against Claude.** `pip install 'alg[anthropic]'`, set
    `ANTHROPIC_API_KEY`, `alg run tasks/calc_bug --show-diff`. Read the trace, not
    just the verdict.
-2. **The same run against local Ollama.** `alg run tasks/calc_bug --provider ollama
-   --model <your 27B>`. Expect it to fail differently: smaller models produce more
-   malformed tool calls and more premature "I fixed it". Those are exactly the
-   failures the stop rules exist to catch — check *which* rule fires.
+2. **The same run against local Ollama** — see `04-local-model.md`, which now
+   covers the whole path including `alg doctor`. Expect it to fail differently:
+   smaller models produce more malformed tool calls and more premature "I fixed
+   it". Those are exactly the failures the stop rules exist to catch — check
+   *which* rule fires.
 3. **More tasks.** One bug per task is too easy to be informative. Add: a bug
    whose fix requires reading two files; a task where the obvious fix breaks
    another test; a task with a genuinely ambiguous spec. `tasks/` is a directory

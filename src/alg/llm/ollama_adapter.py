@@ -68,6 +68,39 @@ class OllamaLLM:
         raw = self._post("/api/chat", payload)
         return _decode(raw)
 
+    # --- introspection, used by `alg doctor` ------------------------------
+
+    def list_models(self) -> list[str]:
+        """Model names the server currently has pulled."""
+        raw = self._get("/api/tags")
+        return sorted(m.get("name", "") for m in raw.get("models", []))
+
+    def describe(self) -> dict[str, Any]:
+        """`/api/show` for this model: capabilities, context length, family."""
+        return self._post("/api/show", {"model": self.model})
+
+    def context_length(self) -> int | None:
+        info = self.describe().get("model_info") or {}
+        for key, value in info.items():
+            if key.endswith(".context_length"):
+                return int(value)
+        return None
+
+    def supports_tools(self) -> bool:
+        """Ollama reports per-model capabilities; older servers omit the field."""
+        caps = self.describe().get("capabilities")
+        return True if caps is None else "tools" in caps
+
+    def _get(self, path: str) -> dict[str, Any]:
+        request = urllib.request.Request(self.host + path, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"ollama HTTP {exc.code}: {exc.read().decode()[:500]}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"cannot reach ollama at {self.host}: {exc.reason}") from exc
+
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
             self.host + path,
