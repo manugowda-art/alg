@@ -119,6 +119,7 @@ class FixerAgent:
             "attempt": 0,
             "reports": [report.as_dict()],
             "green": report.green,
+            "collected": report.collected,
             "last_summary": report.summary(),
         }
 
@@ -182,11 +183,19 @@ class FixerAgent:
 
     def report(self, state: State) -> State:
         diff = render_diff(self.workspace, self._origin)
-        summary = (
-            f"green after {state.get('attempt', 0)} attempt(s)"
-            if state.get("green")
-            else f"not fixed after {state.get('attempt', 0)} attempt(s): {state.get('last_summary')}"
-        )
+        if state.get("collected", 1) == 0:
+            summary = (
+                f"verifier is broken: `{' '.join(self.task.test_command)}` collected no "
+                f"tests, so there is nothing to repair against. Fix the test command "
+                f"before running the agent."
+            )
+        elif state.get("green"):
+            summary = f"green after {state.get('attempt', 0)} attempt(s)"
+        else:
+            summary = (
+                f"not fixed after {state.get('attempt', 0)} attempt(s): "
+                f"{state.get('last_summary')}"
+            )
         self.trace.emit("agent.result", green=bool(state.get("green")), summary=summary)
         return {"summary": summary, "diff": diff}
 
@@ -202,13 +211,23 @@ class FixerAgent:
         graph.set_entry("baseline")
         graph.add_conditional_edge(
             "baseline",
-            lambda s: "green" if s["green"] else "red",
-            {"green": "report", "red": "repair"},
+            self._baseline_router,
+            {"green": "report", "red": "repair", "broken": "report"},
         )
         graph.add_edge("repair", "verify")
         graph.add_conditional_edge("verify", self._verify_router, {"green": "report", "retry": "repair", "exhausted": "report"})
         graph.add_edge("report", END)
         return graph
+
+    def _baseline_router(self, state: State) -> str:
+        """A suite that collected nothing cannot be repaired.
+
+        Without this branch the agent spends its whole budget asking a model to
+        fix code whose tests never ran — and the model has no way to tell.
+        """
+        if state.get("collected", 0) == 0:
+            return "broken"
+        return "green" if state["green"] else "red"
 
     def _verify_router(self, state: State) -> str:
         if state["green"]:

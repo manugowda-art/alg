@@ -43,12 +43,23 @@ class TestReport:
     timed_out: bool = False
 
     @property
+    def collected(self) -> int:
+        return self.passed + self.failed + self.errors + self.skipped
+
+    @property
     def green(self) -> bool:
+        """Green requires tests to have actually passed.
+
+        A command that collects nothing and exits 0 is a broken verifier, not a
+        solved task — and reporting it as success is the worst thing this class
+        can do, because every layer above trusts it.
+        """
         return (
             not self.timed_out
             and self.exit_code == 0
             and self.failed == 0
             and self.errors == 0
+            and self.passed > 0
         )
 
     @property
@@ -60,6 +71,11 @@ class TestReport:
     def summary(self) -> str:
         if self.timed_out:
             return "test run TIMED OUT"
+        if self.collected == 0:
+            return (
+                "NO TESTS RAN — the test command completed but collected nothing. "
+                "The suite did not execute, so its result means nothing."
+            )
         parts = [f"{self.passed} passed", f"{self.failed} failed"]
         if self.errors:
             parts.append(f"{self.errors} errors")

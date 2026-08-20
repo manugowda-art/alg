@@ -21,8 +21,14 @@ pytest                              # 143 tests, no network
 
 That second command failing *is* the correct outcome — it is the task. If you
 see anything other than 6 pass / 5 fail, your Node is the problem, not the task.
-Node 22.18+ runs `.ts` with no flag and no `npm install`; on older Node, add
-`--experimental-strip-types` to `test_command` in `tasks/calc_bug/alg.task.json`.
+
+**`0 passed, 0 failed` is the dangerous one.** Node below 22.18 does not match
+`.ts` test files at all, so `node --test` collects nothing and exits 0. Upgrade,
+or add the flag to `test_command` in `tasks/calc_bug/alg.task.json`:
+
+```json
+"test_command": ["node", "--experimental-strip-types", "--test", "--test-reporter=tap"]
+```
 
 ## 1. Pick a model that can call tools
 
@@ -141,6 +147,8 @@ Honest calibration, so a bad run does not read as a broken repo:
 
 | Symptom | Cause | Fix |
 | :--- | :--- | :--- |
+| `no such task directory: tasks/calc_bug` | Running from outside the repo | `cd` to the repo root, or pass an absolute path |
+| `task baseline  no tests ran` | Node too old to strip types — it matches no `.ts` files | Upgrade to 22.18+, or add `--experimental-strip-types` to `test_command` |
 | `cannot reach ollama` | Server not running | `ollama serve` |
 | `does not support tools` | Model template has no tool support | Use qwen3 / qwen2.5-coder |
 | Model narrates instead of calling tools | Weak tool template | Different model; confirm with `alg doctor` |

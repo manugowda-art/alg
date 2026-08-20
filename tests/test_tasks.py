@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from alg.tasks import TaskSpec, TaskError
+from alg.tasks import TaskError, TaskSpec
 from alg.tools.tests_tool import run_tests
 
 
@@ -79,3 +79,78 @@ def test_an_unknown_runner_fails_loudly_rather_than_reporting_a_false_green(work
     spec = TaskSpec.load(write_manifest(tmp_path, runner="mocha"))
     with pytest.raises(ValueError, match="unknown runner"):
         run_tests(workspace, spec)
+
+
+# --- a verifier that does not verify --------------------------------------
+
+
+def broken_task(tmp_path, command):
+    """A task whose test command exits 0 without running anything."""
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "thing.ts").write_text("export const x = 1;\n")
+    (tmp_path / "alg.task.json").write_text(
+        json.dumps(
+            {
+                "name": "broken",
+                "language": "TypeScript",
+                "runner": "node-test",
+                "test_command": command,
+            }
+        )
+    )
+    return tmp_path
+
+
+def test_a_command_that_collects_nothing_is_not_green(tmp_path):
+    """The failure that Node 22.17 produces: no .ts files matched, exit 0."""
+    from alg.workspace import Workspace
+
+    task_dir = broken_task(tmp_path / "task", ["node", "-e", ""])
+    workspace = Workspace.materialize(task_dir, tmp_path / "work")
+    report = run_tests(workspace, TaskSpec.load(task_dir))
+
+    assert report.exit_code == 0
+    assert report.collected == 0
+    assert report.green is False, "a suite that ran nothing must never report green"
+    assert "NO TESTS RAN" in report.summary()
+
+
+def test_the_agent_refuses_to_repair_against_a_broken_verifier(tmp_path, trace):
+    from alg.agent import AgentConfig, FixerAgent
+    from alg.workspace import Workspace
+    from conftest import ScriptedLLM, say
+
+    task_dir = broken_task(tmp_path / "task", ["node", "-e", ""])
+    workspace = Workspace.materialize(task_dir, tmp_path / "work")
+    llm = ScriptedLLM([say("should never be asked")])
+
+    state = FixerAgent(
+        workspace=workspace, task=TaskSpec.load(task_dir), llm=llm, trace=trace,
+        config=AgentConfig(),
+    ).run()
+
+    assert llm.calls == [], "no model budget should be spent on an unfixable task"
+    assert state["green"] is False
+    assert "verifier is broken" in state["summary"]
+    labels = [e.payload["label"] for e in trace.of_type("graph.route")]
+    assert labels == ["broken"]
+
+
+def test_the_doctor_calls_a_zero_collect_baseline_a_failure(tmp_path):
+    from alg.doctor import FAIL, check_baseline
+
+    task_dir = broken_task(tmp_path / "task", ["node", "-e", ""])
+    check = check_baseline(task_dir, TaskSpec.load(task_dir), tmp_path / "work")
+
+    assert check.status == FAIL
+    assert "no tests ran" in check.detail
+    assert "stripping types" in check.fix
+
+
+def test_a_missing_directory_and_a_missing_manifest_read_differently(tmp_path):
+    with pytest.raises(TaskError, match="no such task directory"):
+        TaskSpec.load(tmp_path / "nope")
+
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(TaskError, match="has no alg.task.json"):
+        TaskSpec.load(tmp_path / "empty")

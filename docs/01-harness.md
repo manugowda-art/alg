@@ -127,6 +127,25 @@ That last one is the important one. A harness that silently reported "0 failed"
 for a runner it could not parse would hand the loop a fake green — the single
 worst thing a verifier can do.
 
+**This is not hypothetical.** An early version of `TestReport.green` asked only
+"did the command exit 0 with no failures". On Node 22.17, which does not match
+`.ts` files at all, `node --test` collects nothing and exits 0 — so the baseline
+reported *green*, the graph routed straight to `report`, and the agent
+cheerfully announced the task was already solved. Nothing had run.
+
+Two fixes, at two layers:
+
+- `green` now requires `passed > 0`. Exit status is not evidence; a passing
+  test is.
+- The graph gained a `broken` branch out of `baseline`, so a suite that
+  collected nothing goes straight to `report` with an explanation instead of
+  spending the whole budget asking a model to fix code whose tests never ran.
+
+The general lesson is worth more than the fix: **your verifier's failure modes
+are your agent's failure modes.** Everything above the verifier trusts it
+completely, so the question to ask of any new runner is not "does it detect
+failures" but "can it report success without having done anything".
+
 ## What is deliberately missing
 
 No permission prompts, no approval gates, no per-tool rate limits, no context

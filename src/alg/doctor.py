@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from dataclasses import dataclass
@@ -47,6 +48,11 @@ def check_python() -> Check:
 
 
 def check_node(task: TaskSpec | None) -> Check:
+    """Probe the runtime by running a real .ts file.
+
+    Version comparison is a guess; this is a measurement. It also reports the
+    exact flag that works, which is what goes into the manifest.
+    """
     binary = (task.test_command[0] if task else "node") or "node"
     if shutil.which(binary) is None:
         return Check("node", FAIL, f"{binary} not found on PATH", "install Node 22.18+")
@@ -59,14 +65,29 @@ def check_node(task: TaskSpec | None) -> Check:
     if binary != "node":
         return Check("node", OK, f"{binary} {version}")
 
-    major, _, minor = version.lstrip("v").partition(".")
-    minor = minor.split(".")[0] or "0"
-    if (int(major), int(minor)) < (22, 18):
-        return Check(
-            "node", WARN, f"{version} may not run .ts without a flag",
-            "add --experimental-strip-types to test_command in alg.task.json",
-        )
-    return Check("node", OK, version)
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe.ts"
+        probe.write_text("const answer: number = 42;\nconsole.log(answer);\n")
+
+        def runs(argv: list[str]) -> bool:
+            try:
+                done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError):
+                return False
+            return done.returncode == 0 and "42" in done.stdout
+
+        if runs([binary, str(probe)]):
+            return Check("node", OK, f"{version}, runs .ts natively")
+        if runs([binary, "--experimental-strip-types", str(probe)]):
+            return Check(
+                "node", WARN,
+                f"{version} cannot run .ts without a flag",
+                'add "--experimental-strip-types" to test_command in '
+                "tasks/calc_bug/alg.task.json, or upgrade to Node 22.18+",
+            )
+    return Check(
+        "node", FAIL, f"{version} cannot run TypeScript at all", "upgrade to Node 22.18+"
+    )
 
 
 def check_task(task_dir: str | Path) -> tuple[Check, TaskSpec | None]:
@@ -88,15 +109,19 @@ def check_baseline(task_dir: str | Path, task: TaskSpec, work_dir: Path) -> Chec
     except Exception as exc:
         return Check("task baseline", FAIL, f"{type(exc).__name__}: {exc}")
     detail = f"{report.passed} passed, {report.failed} failed"
+    if report.collected == 0:
+        # Checked before "green": a command that exits 0 having collected
+        # nothing looks like success and is the most dangerous state here.
+        return Check(
+            "task baseline", FAIL, "no tests ran — the verifier is not working",
+            f"`{' '.join(task.test_command)}` collected nothing. "
+            f"If the suite is TypeScript, this is usually Node not stripping types "
+            f"(see the node check above).",
+        )
     if report.green:
         return Check(
             "task baseline", WARN, detail + " — already green",
             "the agent will stop at `report` with nothing to do",
-        )
-    if report.passed == 0 and report.failed == 0:
-        return Check(
-            "task baseline", FAIL, "no tests ran",
-            f"`{' '.join(task.test_command)}` produced no results in {work_dir}",
         )
     return Check("task baseline", OK, detail + " — the verifier works")
 

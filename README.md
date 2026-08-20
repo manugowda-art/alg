@@ -64,10 +64,17 @@ command, and a parser keyed by `runner` turns its output into a verdict.
 | Python 3.11+ | The engine: harness, loop, graph, CLI |
 | Node 22.18+ | The task: `node --test` runs `.ts` directly, no build step |
 
-Verified on Python 3.11 and Node 22.22. If `node --test` fails to parse the
-`.ts` files on your Node build, add `--experimental-strip-types` to
-`test_command` in `tasks/calc_bug/alg.task.json` — the harness takes the command
-from there, so nothing in the engine changes.
+Verified on Python 3.11 and Node 22.22; **Node 22.17 is confirmed too old** —
+it does not match `.ts` files at all, so `node --test` collects nothing. Either
+upgrade, or add the flag to `test_command` in `tasks/calc_bug/alg.task.json`:
+
+```json
+"test_command": ["node", "--experimental-strip-types", "--test", "--test-reporter=tap"]
+```
+
+The harness takes the command from the manifest, so nothing in the engine
+changes. `alg doctor` probes this by running a real `.ts` file rather than
+comparing version numbers, and prints the flag if you need it.
 
 ## Try it
 

@@ -38,9 +38,19 @@ class TaskSpec:
 
     @classmethod
     def load(cls, task_dir: str | Path) -> "TaskSpec":
-        path = Path(task_dir) / MANIFEST
+        directory = Path(task_dir)
+        if not directory.is_dir():
+            raise TaskError(
+                f"no such task directory: {task_dir} "
+                f"(resolved to {directory.resolve()}) — run from the repo root, "
+                f"or pass an absolute path"
+            )
+        path = directory / MANIFEST
         if not path.is_file():
-            raise TaskError(f"no {MANIFEST} in {task_dir}")
+            raise TaskError(
+                f"{directory} exists but has no {MANIFEST}; "
+                f"every task needs one (see README, 'Adding a task')"
+            )
         try:
             raw = json.loads(path.read_text())
         except json.JSONDecodeError as exc:
