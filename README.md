@@ -39,22 +39,63 @@ the graph knows either language — the task's `alg.task.json` supplies the test
 command, and a parser keyed by `runner` turns its output into a verdict.
 
 ```
-             ┌─────────────── graph.py ────────────────┐
-             │  baseline ─red→ repair → verify ─retry→ ⤾ │
-             │      └─green→ report ←─green/exhausted─┘  │
-             └───────────────────┬─────────────────────┘
-                                 │  each repair node runs
-                     ┌───────────▼───────────┐
-                     │       loop.py         │  bounded model/tool cycle
-                     │  action → evidence →  │  with named stop rules
-                     │  feedback → stop rule │
-                     └───────────┬───────────┘
-                                 │  every tool call goes through
-        ┌────────────────────────▼────────────────────────┐
-        │  workspace.py + tools/    (the harness)         │
-        │  disposable copy · path jail · schema validation │
-        │  contained errors · bounded execution · traces   │
-        └─────────────────────────────────────────────────┘
+          ┌──────────────────── graph.py ─────────────────────┐
+          │  baseline ──red──→ repair ──→ verify ──retry──┐   │
+          │                      ↑                        │   │
+          │                      └────────────────────────┘   │
+          │                                                   │
+          │  baseline / verify ──green | exhausted──→ report  │
+          └─────────────────────────┬─────────────────────────┘
+                                    │  each repair node runs one
+              ┌───────────────── loop.py ──────────────────┐
+              │  action → evidence → feedback → stop rule  │  bounded cycle, five named stop rules
+              └──────────────────────┬─────────────────────┘
+                                     │  every tool call goes through
+      ┌─────── workspace.py + tools/   (the harness) ───────┐
+      │  disposable copy · path jail · schema validation    │
+      │  contained errors · bounded execution · full trace  │
+      └─────────────────────────────────────────────────────┘
+```
+
+## Prerequisites
+
+| | Why |
+| :--- | :--- |
+| Python 3.11+ | The engine: harness, loop, graph, CLI |
+| Node 22.18+ | The task: `node --test` runs `.ts` directly, no build step |
+
+Verified on Python 3.11 and Node 22.22. If `node --test` fails to parse the
+`.ts` files on your Node build, add `--experimental-strip-types` to
+`test_command` in `tasks/calc_bug/alg.task.json` — the harness takes the command
+from there, so nothing in the engine changes.
+
+## Try it
+
+```bash
+pip install -e '.[dev]'
+pytest                                    # 123 tests, offline
+(cd tasks/calc_bug && npm test)           # watch the task fail on its own
+alg graph                                 # print the topology as mermaid
+```
+
+Live runs need a model. Either provider works — the harness cannot tell them apart:
+
+```bash
+pip install -e '.[anthropic]'
+export ANTHROPIC_API_KEY=...
+alg run tasks/calc_bug --show-diff
+
+# or a local model, no key, no cloud
+alg run tasks/calc_bug --provider ollama --model gemma3:27b
+```
+
+Then read what actually happened:
+
+```bash
+alg trace runs/<id>/trace.jsonl                     # everything
+alg trace runs/<id>/trace.jsonl --type tool.call    # just the tool calls
+alg trace runs/<id>/trace.jsonl --type graph.route  # just the branches
+cat runs/<id>/checkpoints.jsonl                     # state after every node
 ```
 
 ## Layout
@@ -79,37 +120,56 @@ tasks/calc_bug/   TypeScript stats module: two seeded defects, 11 tests, zero de
   src/stats.ts    The code under repair.
   test/           node:test suite — the specification, and off-limits to the agent.
 tests/            123 tests covering all three layers, no network required.
+  conftest.py     Fixtures + ScriptedLLM, the offline test double for a model.
+  test_harness.py Jail, bounded execution, registry, fs tools
+  test_patch.py   Diff parsing and application
+  test_loop.py    Stop rules, feedback, evidence
+  test_graph.py   Routing, cycles, checkpoints, resume
+  test_tasks.py   Manifest loading and validation
+  test_agent.py   The three layers end to end, plus the test-output parsers
 docs/             One document per layer, plus the roadmap.
 ```
 
-## Try it
+## Adding a task
 
-```bash
-pip install -e '.[dev]'
-pytest                                    # 123 tests, offline
-cd tasks/calc_bug && npm test             # see the task fail on its own
-alg graph                                 # print the topology as mermaid
+A task is a directory with an `alg.task.json`. The engine reads it and never
+names a language itself. This is the bundled one, verbatim:
+
+```json
+{
+  "name": "calc_bug",
+  "language": "TypeScript",
+  "description": "A statistics module with two seeded defects and 11 tests.",
+  "runner": "node-test",
+  "test_command": ["node", "--test", "--test-reporter=tap"],
+  "focus_template": ["--test-name-pattern", "{target}"],
+  "focus_hint": "a test-name pattern, e.g. \"median\"",
+  "source_glob": "src/**/*.ts",
+  "test_glob": "test/**/*.ts",
+  "search_glob": "**/*.ts"
+}
 ```
 
-Live runs need a model. Either provider works — the harness cannot tell them apart:
+| Key | Required | Meaning |
+| :--- | :--- | :--- |
+| `name` | yes | Task identifier |
+| `runner` | yes | Selects the output parser from `PARSERS` in `tests_tool.py` |
+| `test_command` | yes | Argv run inside the workspace; its exit code and output are the verdict |
+| `language` | no | Named in the system prompt and the `run_tests` description |
+| `description` | no | Free text for humans |
+| `focus_template` | no | Argv fragment for narrowing to one test; `{target}` is substituted. Omitted → the target is appended positionally (what pytest wants) |
+| `focus_hint` | no | How the target is described to the model |
+| `source_glob` / `test_glob` | no | Which files are source and which are specification |
+| `search_glob` | no | Default glob for the `search` tool |
+| `timeout` | no | Seconds per test run (default 120) |
 
-```bash
-pip install -e '.[anthropic]'
-export ANTHROPIC_API_KEY=...
-alg run tasks/calc_bug --show-diff
+Unknown keys are rejected rather than ignored, so a typo fails at load time
+instead of silently doing nothing. `node-test` and `pytest` parsers ship today:
+a Vitest or Jest task costs a manifest if its reporter emits TAP, and a manifest
+plus one parser function if it does not.
 
-# or a local model, no key, no cloud
-alg run tasks/calc_bug --provider ollama --model gemma3:27b
-```
-
-Then read what actually happened:
-
-```bash
-alg trace runs/<id>/trace.jsonl                     # everything
-alg trace runs/<id>/trace.jsonl --type tool.call    # just the tool calls
-alg trace runs/<id>/trace.jsonl --type graph.route  # just the branches
-cat runs/<id>/checkpoints.jsonl                     # state after every node
-```
+The bar for a good task is not the language. It is: **a verifier that returns
+structure, and a definition of "solved" the agent cannot fake.**
 
 ## Reading order
 
