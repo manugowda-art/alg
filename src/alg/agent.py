@@ -108,6 +108,7 @@ class FixerAgent:
         self._best_snapshot = dict(self._origin)
         self._best_score: tuple[int, int] | None = None
         self._observed: list[TestReport] = []
+        self._reported = 0  # how many observed runs have become evidence
 
     # --- graph nodes ------------------------------------------------------
 
@@ -272,9 +273,17 @@ class FixerAgent:
 
     def _evidence(self, state: LoopState) -> str | None:
         """Evidence for the loop's stall detector: the failing-test signature of
-        the most recent run the model itself triggered."""
-        if not self._observed:
+        the most recent run the model itself triggered.
+
+        Returns None when no *new* run has happened since the last iteration.
+        That distinction is the whole point: repeating a stale reading would
+        make the stall rule fire on "the model has not re-run the tests
+        lately", which is a different thing from "the model is not making
+        progress" — and it fires while the model is mid-edit and doing fine.
+        """
+        if len(self._observed) <= self._reported:
             return None
+        self._reported = len(self._observed)
         report = self._observed[-1]
         return f"{report.passed}p/{report.failed}f:{','.join(report.signature)}"
 

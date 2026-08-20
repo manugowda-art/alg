@@ -143,6 +143,26 @@ Honest calibration, so a bad run does not read as a broken repo:
   a good outcome; the interesting comparison is *how many attempts* and *which
   stop reasons*, not pass/fail.
 
+## 5b. A real result, for calibration
+
+First live run, `qwen-fast:latest` (Ollama, Apple silicon), default settings:
+
+```
+  baseline   6 passed, 5 failed
+  attempt 1  10 passed, 1 failed
+  attempt 2  11 passed, 0 failed
+  green after 2 attempt(s)
+  tokens: 21643 in / 1923 out
+```
+
+Both defects found and fixed minimally, no test file touched. Note the shape:
+the model fixed the `mean` bug first (which clears four failures, because
+`variance` depends on it), then needed a second attempt for `median`. Two
+attempts is a *good* result — the retry loop is doing the work it exists for.
+
+Note also the token ratio: 21.6k in, 1.9k out. Reading is most of the cost, so
+context size matters more than generation speed for this kind of task.
+
 ## 6. If it does not work
 
 | Symptom | Cause | Fix |

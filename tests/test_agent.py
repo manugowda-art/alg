@@ -293,3 +293,51 @@ def test_token_usage_accumulates_across_attempts(workspace, task, trace):
     state = agent(workspace, task, llm, trace, max_attempts=2).run()
     assert state["tokens"]["input"] == 20  # two attempts x one 10-token call
     assert state["tokens"]["output"] == 10
+
+
+# --- what a real local-model run exposed ----------------------------------
+
+
+def test_editing_without_re_running_tests_is_not_a_stall(workspace, task, trace):
+    """Observed on a live qwen run: the model ran the tests once, then spent
+    four iterations reading and editing. Evidence repeated the stale reading,
+    `stalled_evidence(4)` fired, and a productive attempt was cut off at
+    10 passed / 1 failed. Progress is measured by test runs, not by iterations.
+    """
+    llm = ScriptedLLM(
+        [
+            call("run_tests"),                       # one real reading: 6p/5f
+            call("read_file", path=SOURCE),          # then four iterations
+            call("search", pattern="function mean"),  # of work with no re-run
+            fix_mean(),
+            fix_median(),
+            say("fixed both defects"),
+        ]
+    )
+    state = agent(workspace, task, llm, trace, max_attempts=1).run()
+
+    assert state["loop_stop_reasons"] == ["model_finished"]
+    assert state["green"] is True, "the attempt should not have been cut short"
+
+
+def test_repeated_identical_test_runs_do_still_stall(workspace, task, trace):
+    """The rule must keep its teeth: four real runs with the same failures is
+    exactly the spinning it exists to catch."""
+    llm = ScriptedLLM(default=call("run_tests"))
+    state = agent(workspace, task, llm, trace, max_attempts=1, loop_max_iterations=20).run()
+
+    assert len(state["loop_stop_reasons"]) == 1
+    reason = state["loop_stop_reasons"][0]
+    assert reason.startswith("stalled_evidence(4)")
+    assert "6p/5f" in reason  # the reason names the reading it stalled on
+    assert state["green"] is False
+
+
+def test_evidence_is_recorded_once_per_test_run(workspace, task, trace):
+    llm = ScriptedLLM(
+        [call("run_tests"), call("read_file", path=SOURCE), call("run_tests"), say("done")]
+    )
+    agent(workspace, task, llm, trace, max_attempts=1).run()
+
+    # Two run_tests calls -> two pieces of evidence, not one per iteration.
+    assert len(trace.of_type("loop.evidence")) == 2

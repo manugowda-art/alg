@@ -59,6 +59,66 @@ Note the shape of the signature. `3p/2f` alone is not enough — a run that trad
 one failure for a different one shows the same counts while making no progress,
 so the failing test *ids* are part of the signature.
 
+## A real bug in this file, found by a real run
+
+The first live run against a local Qwen produced this:
+
+```
+  baseline   6 passed, 5 failed
+  attempt 1  10 passed, 1 failed
+  attempt 2  11 passed, 0 failed
+  stop reasons: stalled_evidence(4) at '6p/5f:...', model_finished
+```
+
+Green — but look at attempt 1. It *made progress* (5 failures down to 1) and
+was still stopped by the stall detector, at the **baseline** reading. Both
+things cannot be true: a loop that went from 5 failures to 1 was not stalled.
+
+The bug was in the evidence function, not the rule:
+
+```python
+# before — returns the last reading even if it is old
+if not self._observed:
+    return None
+return signature_of(self._observed[-1])
+```
+
+`self._observed` only grows when the *model* calls `run_tests`. The model ran
+the tests once, then spent four iterations reading and editing — good, normal
+work. Every one of those iterations re-reported the same stale reading, four
+identical values landed in `state.evidence`, and the rule fired.
+
+So `stalled_evidence` was not measuring "the model is not making progress". It
+was measuring **"the model has not re-run the tests lately"** — a different
+thing, and one that is often true precisely when the model is mid-edit and
+doing fine. The fix is one condition:
+
+```python
+# after — silence is not evidence
+if len(self._observed) <= self._reported:
+    return None
+self._reported = len(self._observed)
+return signature_of(self._observed[-1])
+```
+
+Three lessons worth more than the fix:
+
+1. **An iteration is not an observation.** The loop ticks on model turns; the
+   evidence ticks on verifier runs. Coupling them conflates "time passed" with
+   "nothing changed".
+2. **Absence of evidence must not be encoded as evidence.** Returning a stale
+   value where `None` was correct is what created a phantom pattern for the
+   rule to match.
+3. **The graph hid it.** The retry loop recovered — attempt 2 finished the job,
+   the run went green, and a pass/fail view would have shown nothing wrong.
+   Only the *stop reasons* exposed it. This is the argument for naming every
+   exit: the run succeeded and was still broken.
+
+The gap the fix leaves open is worth knowing: a model that edits and *never*
+re-runs the tests now produces no evidence at all, so `stalled_evidence` cannot
+fire for it. That is a different failure and wants its own named rule — see the
+exercises.
+
 ## Where the loop stops and the graph starts
 
 The loop deliberately cannot do three things:
@@ -77,9 +137,13 @@ conversations happen and what comes between them.**
 
 1. Add a `no_mutation` stop rule: halt if `k` iterations pass with only read-only
    tool calls. (The model is exploring, not working.)
-2. Make `stalled_evidence` smarter — stop on *non-improvement* rather than exact
+2. Add its mirror, `unverified_edits(k)`: `k` iterations that mutate files with
+   no `run_tests` in between. That is the gap the evidence fix leaves open, and
+   it is arguably better handled by *nudging* the model than by stopping —
+   which makes it a good place to think about what a stop rule is actually for.
+3. Make `stalled_evidence` smarter — stop on *non-improvement* rather than exact
    repetition, using the score function from `agent.py`.
-3. Add context compaction: when `state.messages` exceeds N turns, summarize the
+4. Add context compaction: when `state.messages` exceeds N turns, summarize the
    middle. Note what this does to prompt caching and to the trace.
-4. Measure it. Run the same task at `max_iterations` 3, 6, and 12 and plot
+5. Measure it. Run the same task at `max_iterations` 3, 6, and 12 and plot
    attempts-to-green against tokens. That curve is the whole subject.
