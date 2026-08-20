@@ -25,6 +25,7 @@ from .loop import (
     tool_error_streak,
     wall_clock,
 )
+from .tasks import TaskSpec
 from .tools import ToolRegistry
 from .tools.fs import (
     diff_tool,
@@ -40,14 +41,14 @@ from .tools.tests_tool import TestReport, run_tests, run_tests_tool
 from .workspace import Workspace
 
 SYSTEM_PROMPT = """\
-You are fixing a small Python package so that its existing test suite passes.
+You are fixing a small {language} package so that its existing test suite passes.
 
 The tests encode the intended behaviour. Treat them as the specification: fix the
 source, and do not edit, skip, delete, or weaken any test to make it pass.
 
 How to work:
-- Read before you write. `run_tests` shows you what is failing; `read_file` and
-  `search` show you why.
+- Read before you write. `run_tests` (`{test_command}`) shows you what is failing;
+  `read_file` and `search` show you why.
 - Change the smallest amount of code that fixes the actual defect. No refactors,
   no new abstractions, no error handling for cases that cannot happen.
 - Use `edit_file` for small changes and `apply_patch` for multi-line ones. Both
@@ -97,6 +98,7 @@ class FixerAgent:
     state stays plain JSON and checkpoints stay resumable."""
 
     workspace: Workspace
+    task: TaskSpec
     llm: LLM
     trace: Trace
     config: AgentConfig = field(default_factory=AgentConfig)
@@ -110,7 +112,7 @@ class FixerAgent:
     # --- graph nodes ------------------------------------------------------
 
     def baseline(self, state: State) -> State:
-        report = run_tests(self.workspace, timeout=self.config.test_timeout)
+        report = run_tests(self.workspace, self.task, timeout=self.config.test_timeout)
         self.trace.emit("tests.run", phase="baseline", **report.as_dict())
         self._best_score = _score(report)
         return {
@@ -136,7 +138,7 @@ class FixerAgent:
         loop = AgentLoop(
             llm=self.llm,
             registry=registry,
-            system=SYSTEM_PROMPT,
+            system=self._system_prompt(),
             trace=self.trace,
             label=f"repair#{attempt}",
             stop_rules=[
@@ -161,7 +163,7 @@ class FixerAgent:
         }
 
     def verify(self, state: State) -> State:
-        report = run_tests(self.workspace, timeout=self.config.test_timeout)
+        report = run_tests(self.workspace, self.task, timeout=self.config.test_timeout)
         self.trace.emit("tests.run", phase="verify", attempt=state.get("attempt"), **report.as_dict())
 
         score = _score(report)
@@ -228,12 +230,13 @@ class FixerAgent:
 
     def _registry(self) -> ToolRegistry:
         tools = [
-            *read_only_tools(self.workspace),
+            *read_only_tools(self.workspace, self.task.search_glob),
             edit_file_tool(self.workspace),
             apply_patch_tool(self.workspace),
             diff_tool(self.workspace, self._origin),
             run_tests_tool(
                 self.workspace,
+                self.task,
                 timeout=self.config.test_timeout,
                 on_report=self._observed.append,
             ),
@@ -241,6 +244,12 @@ class FixerAgent:
         if self.config.allow_write_file:
             tools.append(write_file_tool(self.workspace))
         return ToolRegistry(tools, trace=self.trace)
+
+    def _system_prompt(self) -> str:
+        return SYSTEM_PROMPT.format(
+            language=self.task.language,
+            test_command=" ".join(self.task.test_command),
+        )
 
     def _evidence(self, state: LoopState) -> str | None:
         """Evidence for the loop's stall detector: the failing-test signature of
@@ -292,7 +301,12 @@ def build_agent(
     trace: Trace,
     config: AgentConfig | None = None,
 ) -> FixerAgent:
+    task = TaskSpec.load(task_dir)
     workspace = Workspace.materialize(task_dir, work_dir)
     return FixerAgent(
-        workspace=workspace, llm=llm, trace=trace, config=config or AgentConfig()
+        workspace=workspace,
+        task=task,
+        llm=llm,
+        trace=trace,
+        config=config or AgentConfig(),
     )

@@ -1,0 +1,10 @@
+{
+  "name": "calc-bug",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A statistics module with seeded defects. The tests are the specification.",
+  "scripts": {
+    "test": "node --test --test-reporter=tap"
+  }
+}

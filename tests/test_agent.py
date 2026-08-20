@@ -7,47 +7,97 @@ a regression gets reverted instead of compounding.
 
 from __future__ import annotations
 
-from conftest import MEAN_BUG, MEAN_FIX, MEDIAN_BUG, MEDIAN_FIX, ScriptedLLM, call, say
+from conftest import (
+    MEAN_BUG,
+    MEAN_FIX,
+    MEDIAN_BUG,
+    MEDIAN_FIX,
+    SOURCE,
+    ScriptedLLM,
+    call,
+    say,
+)
 
 from alg.agent import AgentConfig, FixerAgent
-from alg.graph import JsonlCheckpointer
-from alg.tools.tests_tool import parse_pytest_output, run_tests
+from alg.tools.tests_tool import parse_node_tap, parse_pytest_output, run_tests
+
+FIRST_FAILURE = "test/stats.test.ts::mean of integers"
 
 
 def fix_mean() -> object:
-    return call("edit_file", path="calc/stats.py", old_text=MEAN_BUG, new_text=MEAN_FIX)
+    return call("edit_file", path=SOURCE, old_text=MEAN_BUG, new_text=MEAN_FIX)
 
 
 def fix_median() -> object:
-    return call("edit_file", path="calc/stats.py", old_text=MEDIAN_BUG, new_text=MEDIAN_FIX)
+    return call("edit_file", path=SOURCE, old_text=MEDIAN_BUG, new_text=MEDIAN_FIX)
 
 
-def agent(workspace, llm, trace, **config) -> FixerAgent:
+def agent(workspace, task, llm, trace, **config) -> FixerAgent:
     return FixerAgent(
-        workspace=workspace, llm=llm, trace=trace, config=AgentConfig(**config)
+        workspace=workspace, task=task, llm=llm, trace=trace, config=AgentConfig(**config)
     )
+
+
+def apply_fixes(workspace) -> None:
+    path = workspace.root / SOURCE
+    path.write_text(path.read_text().replace(MEAN_BUG, MEAN_FIX).replace(MEDIAN_BUG, MEDIAN_FIX))
 
 
 # --- test runner ---------------------------------------------------------
 
 
-def test_run_tests_reports_the_seeded_failures(workspace):
-    report = run_tests(workspace)
+def test_run_tests_reports_the_seeded_failures(workspace, task):
+    report = run_tests(workspace, task)
     assert not report.green
     assert report.failed == 5
     assert report.passed == 6
-    assert "tests/test_stats.py::test_mean_of_integers" in report.failing
+    assert FIRST_FAILURE in report.failing
 
 
-def test_run_tests_reports_green_once_both_defects_are_fixed(workspace):
-    path = workspace.root / "calc" / "stats.py"
-    path.write_text(path.read_text().replace(MEAN_BUG, MEAN_FIX).replace(MEDIAN_BUG, MEDIAN_FIX))
-    report = run_tests(workspace)
+def test_run_tests_reports_green_once_both_defects_are_fixed(workspace, task):
+    apply_fixes(workspace)
+    report = run_tests(workspace, task)
     assert report.green
     assert report.failed == 0 and report.failing == ()
 
 
-def test_parse_pytest_output_handles_a_collection_error():
+def test_run_tests_can_focus_a_single_test(workspace, task):
+    report = run_tests(workspace, task, target="median of an even-length list")
+    assert report.failed == 1
+    assert report.failing == ("test/stats.test.ts::median of an even-length list",)
+
+
+def test_tap_parser_identifies_failures_as_file_and_name():
+    report = parse_node_tap(
+        "TAP version 13\n"
+        "# Subtest: adds\n"
+        "not ok 1 - adds\n"
+        "  ---\n"
+        "  location: '/w/test/a.test.ts:4:1'\n"
+        "  ...\n"
+        "1..1\n# tests 1\n# pass 0\n# fail 1\n# skipped 0\n",
+        exit_code=1,
+    )
+    assert report.failed == 1
+    assert report.failing == ("/w/test/a.test.ts::adds",)
+    assert not report.green
+
+
+def test_tap_parser_falls_back_to_the_bare_name_without_a_location():
+    report = parse_node_tap(
+        "not ok 1 - first\nnot ok 2 - second\n# tests 2\n# pass 0\n# fail 2\n", exit_code=1
+    )
+    assert report.failing == ("first", "second")
+
+
+def test_tap_parser_reads_a_green_run():
+    report = parse_node_tap(
+        "ok 1 - adds\n1..1\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n", exit_code=0
+    )
+    assert report.green and report.passed == 1 and report.failing == ()
+
+
+def test_the_pytest_parser_is_still_available_for_python_tasks():
     report = parse_pytest_output(
         "ERROR tests/test_x.py - ImportError: boom\n1 error in 0.01s\n", exit_code=2
     )
@@ -57,48 +107,47 @@ def test_parse_pytest_output_handles_a_collection_error():
 
 
 def test_report_signature_is_stable_regardless_of_failure_order():
-    a = parse_pytest_output("FAILED t.py::x\nFAILED t.py::y\n1 failed in 0s\n", exit_code=1)
-    b = parse_pytest_output("FAILED t.py::y\nFAILED t.py::x\n1 failed in 0s\n", exit_code=1)
+    a = parse_node_tap("not ok 1 - x\nnot ok 2 - y\n# fail 2\n", exit_code=1)
+    b = parse_node_tap("not ok 1 - y\nnot ok 2 - x\n# fail 2\n", exit_code=1)
     assert a.signature == b.signature
 
 
 # --- happy path ----------------------------------------------------------
 
 
-def test_agent_fixes_the_task_and_reaches_the_report_node(workspace, trace):
+def test_agent_fixes_the_task_and_reaches_the_report_node(workspace, task, trace):
     llm = ScriptedLLM(
         [
             call("run_tests"),
-            call("read_file", path="calc/stats.py"),
+            call("read_file", path=SOURCE),
             fix_mean(),
             fix_median(),
             call("run_tests"),
-            say("mean divided by len+1 and median ignored even-length inputs; fixed both."),
+            say("mean divided by length+1 and median ignored even-length inputs; fixed both."),
         ]
     )
-    state = agent(workspace, llm, trace).run()
+    state = agent(workspace, task, llm, trace).run()
 
     assert state["green"] is True
     assert state["attempt"] == 1
     assert "green after 1 attempt" in state["summary"]
-    assert run_tests(workspace).green
+    assert run_tests(workspace, task).green
 
 
-def test_a_task_that_is_already_green_skips_repair_entirely(workspace, trace):
-    path = workspace.root / "calc" / "stats.py"
-    path.write_text(path.read_text().replace(MEAN_BUG, MEAN_FIX).replace(MEDIAN_BUG, MEDIAN_FIX))
+def test_a_task_that_is_already_green_skips_repair_entirely(workspace, task, trace):
+    apply_fixes(workspace)
     llm = ScriptedLLM([say("should never be called")])
 
-    state = agent(workspace, llm, trace).run()
+    state = agent(workspace, task, llm, trace).run()
 
     assert state["green"] is True
     assert state["attempt"] == 0
     assert llm.calls == []  # the router went straight to report
 
 
-def test_the_graph_path_is_visible_in_the_trace(workspace, trace):
+def test_the_graph_path_is_visible_in_the_trace(workspace, task, trace):
     llm = ScriptedLLM([fix_mean(), fix_median(), say("fixed")])
-    agent(workspace, llm, trace).run()
+    agent(workspace, task, llm, trace).run()
 
     nodes = [e.payload["node"] for e in trace.of_type("graph.node.enter")]
     assert nodes == ["baseline", "repair", "verify", "report"]
@@ -106,9 +155,9 @@ def test_the_graph_path_is_visible_in_the_trace(workspace, trace):
     assert labels == ["red", "green"]
 
 
-def test_the_model_only_sees_the_tools_the_harness_offers(workspace, trace):
+def test_the_model_only_sees_the_tools_the_harness_offers(workspace, task, trace):
     llm = ScriptedLLM([say("nothing to do")])
-    agent(workspace, llm, trace).run()
+    agent(workspace, task, llm, trace).run()
 
     _, _, tools = llm.calls[0]
     assert sorted(t.name for t in tools) == [
@@ -122,9 +171,30 @@ def test_the_model_only_sees_the_tools_the_harness_offers(workspace, trace):
     ]
 
 
-def test_write_file_is_off_by_default_and_opt_in(workspace, trace):
+def test_the_system_prompt_and_tools_describe_the_task_s_language(workspace, task, trace):
     llm = ScriptedLLM([say("done")])
-    agent(workspace, llm, trace, allow_write_file=True).run()
+    agent(workspace, task, llm, trace).run()
+
+    system, _, tools = llm.calls[0]
+    assert "TypeScript package" in system
+    assert "node --test" in system
+    run_tests_spec = next(t for t in tools if t.name == "run_tests")
+    assert "TypeScript" in run_tests_spec.description
+    assert "test-name pattern" in run_tests_spec.description
+
+
+def test_search_defaults_to_the_task_s_file_type(workspace, task, trace):
+    llm = ScriptedLLM([say("done")])
+    agent(workspace, task, llm, trace).run()
+
+    _, _, tools = llm.calls[0]
+    search = next(t for t in tools if t.name == "search")
+    assert "**/*.ts" in search.input_schema["properties"]["glob"]["description"]
+
+
+def test_write_file_is_off_by_default_and_opt_in(workspace, task, trace):
+    llm = ScriptedLLM([say("done")])
+    agent(workspace, task, llm, trace, allow_write_file=True).run()
     _, _, tools = llm.calls[0]
     assert "write_file" in [t.name for t in tools]
 
@@ -132,28 +202,27 @@ def test_write_file_is_off_by_default_and_opt_in(workspace, trace):
 # --- partial progress, retries, and giving up ----------------------------
 
 
-def test_partial_progress_triggers_a_retry_and_then_succeeds(workspace, trace):
+def test_partial_progress_triggers_a_retry_and_then_succeeds(workspace, task, trace):
     llm = ScriptedLLM(
         [
-            fix_mean(),  # attempt 1: 3 of 5 failures resolved
+            fix_mean(),  # attempt 1: 4 of 5 failures resolved
             say("fixed the mean bug"),
             fix_median(),  # attempt 2: the rest
             say("fixed the median bug too"),
         ]
     )
-    state = agent(workspace, llm, trace, max_attempts=3).run()
+    state = agent(workspace, task, llm, trace, max_attempts=3).run()
 
     assert state["green"] is True
     assert state["attempt"] == 2
-    reports = state["reports"]
-    assert [r["failed"] for r in reports] == [5, 1, 0]
+    assert [r["failed"] for r in state["reports"]] == [5, 1, 0]
     labels = [e.payload["label"] for e in trace.of_type("graph.route")]
     assert labels == ["red", "retry", "green"]
 
 
-def test_the_retry_prompt_carries_the_current_failure_state(workspace, trace):
+def test_the_retry_prompt_carries_the_current_failure_state(workspace, task, trace):
     llm = ScriptedLLM([fix_mean(), say("partial"), say("out of ideas")])
-    agent(workspace, llm, trace, max_attempts=2).run()
+    agent(workspace, task, llm, trace, max_attempts=2).run()
 
     retry_goal = llm.calls[-1][1][0].text()
     assert "Attempt 2 of 2" in retry_goal
@@ -161,9 +230,9 @@ def test_the_retry_prompt_carries_the_current_failure_state(workspace, trace):
     assert "improved the suite" in retry_goal
 
 
-def test_the_agent_gives_up_after_max_attempts(workspace, trace):
+def test_the_agent_gives_up_after_max_attempts(workspace, task, trace):
     llm = ScriptedLLM(default=say("I have no idea."))
-    state = agent(workspace, llm, trace, max_attempts=2).run()
+    state = agent(workspace, task, llm, trace, max_attempts=2).run()
 
     assert state["green"] is False
     assert state["attempt"] == 2
@@ -172,37 +241,37 @@ def test_the_agent_gives_up_after_max_attempts(workspace, trace):
     assert labels == ["red", "retry", "exhausted"]
 
 
-def test_a_regression_is_reverted_rather_than_compounded(workspace, trace):
+def test_a_regression_is_reverted_rather_than_compounded(workspace, task, trace):
     break_clamp = call(
         "edit_file",
-        path="calc/stats.py",
-        old_text="    return max(low, min(high, value))",
-        new_text="    return None",
+        path=SOURCE,
+        old_text="  return Math.max(low, Math.min(high, value));",
+        new_text="  return NaN;",
     )
     llm = ScriptedLLM([break_clamp, say("tried something")])
-    state = agent(workspace, llm, trace, max_attempts=1).run()
+    state = agent(workspace, task, llm, trace, max_attempts=1).run()
 
     assert state["reverted"] is True
-    assert "return max(low, min(high, value))" in (workspace.root / "calc/stats.py").read_text()
+    assert "Math.max(low, Math.min(high, value))" in (workspace.root / SOURCE).read_text()
     revert = trace.of_type("agent.revert")
-    assert revert and revert[0].payload["files"] == ["calc/stats.py"]
+    assert revert and revert[0].payload["files"] == [SOURCE]
     assert "reverted" in state["assessment"]
 
 
-def test_the_final_diff_shows_only_the_agent_s_changes(workspace, trace):
+def test_the_final_diff_shows_only_the_agent_s_changes(workspace, task, trace):
     llm = ScriptedLLM([fix_mean(), fix_median(), say("fixed")])
-    state = agent(workspace, llm, trace).run()
+    state = agent(workspace, task, llm, trace).run()
 
     diff = state["diff"]
-    assert "--- a/calc/stats.py" in diff
+    assert f"--- a/{SOURCE}" in diff
     assert MEAN_FIX in diff
-    assert "tests/test_stats.py" not in diff  # the tests were left alone
+    assert "test/stats.test.ts" not in diff  # the tests were left alone
 
 
-def test_a_run_is_checkpointed_at_every_node(workspace, trace, tmp_path):
+def test_a_run_is_checkpointed_at_every_node(workspace, task, trace, tmp_path):
     llm = ScriptedLLM([fix_mean(), fix_median(), say("fixed")])
     path = tmp_path / "checkpoints.jsonl"
-    agent(workspace, llm, trace).run(checkpoint_path=path)
+    agent(workspace, task, llm, trace).run(checkpoint_path=path)
 
     # Read the file directly: constructing a JsonlCheckpointer truncates it.
     lines = [line for line in path.read_text().splitlines() if line.strip()]
@@ -211,16 +280,16 @@ def test_a_run_is_checkpointed_at_every_node(workspace, trace, tmp_path):
     assert '"node": "report"' in lines[-1]
 
 
-def test_loop_stop_reasons_are_recorded_per_attempt(workspace, trace):
-    llm = ScriptedLLM(default=call("read_file", path="calc/stats.py"))
-    state = agent(workspace, llm, trace, max_attempts=2, loop_max_iterations=3).run()
+def test_loop_stop_reasons_are_recorded_per_attempt(workspace, task, trace):
+    llm = ScriptedLLM(default=call("read_file", path=SOURCE))
+    state = agent(workspace, task, llm, trace, max_attempts=2, loop_max_iterations=3).run()
 
     assert state["loop_stop_reasons"] == ["max_iterations(3)", "max_iterations(3)"]
     assert state["green"] is False
 
 
-def test_token_usage_accumulates_across_attempts(workspace, trace):
+def test_token_usage_accumulates_across_attempts(workspace, task, trace):
     llm = ScriptedLLM(default=say("no idea"))
-    state = agent(workspace, llm, trace, max_attempts=2).run()
+    state = agent(workspace, task, llm, trace, max_attempts=2).run()
     assert state["tokens"]["input"] == 20  # two attempts x one 10-token call
     assert state["tokens"]["output"] == 10

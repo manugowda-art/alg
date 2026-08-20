@@ -24,14 +24,14 @@ from alg.workspace import Workspace, WorkspaceError
 
 
 def test_materialize_copies_task_and_leaves_source_alone(workspace, task_dir):
-    assert (workspace.root / "calc" / "stats.py").is_file()
-    (workspace.root / "calc" / "stats.py").write_text("# clobbered\n")
-    assert "def mean" in (task_dir / "calc" / "stats.py").read_text()
+    assert (workspace.root / "src" / "stats.ts").is_file()
+    (workspace.root / "src" / "stats.ts").write_text("// clobbered\n")
+    assert "export function mean" in (task_dir / "src" / "stats.ts").read_text()
 
 
 @pytest.mark.parametrize(
     "path",
-    ["/etc/passwd", "../escape.py", "calc/../../escape.py", "calc/../../../tmp/x"],
+    ["/etc/passwd", "../escape.ts", "src/../../escape.ts", "src/../../../tmp/x"],
 )
 def test_resolve_refuses_paths_outside_the_workspace(workspace, path):
     with pytest.raises(WorkspaceError):
@@ -39,8 +39,8 @@ def test_resolve_refuses_paths_outside_the_workspace(workspace, path):
 
 
 def test_resolve_allows_paths_inside_the_workspace(workspace):
-    assert workspace.resolve("calc/stats.py").is_file()
-    assert workspace.resolve("does/not/exist.py").parent.name == "not"
+    assert workspace.resolve("src/stats.ts").is_file()
+    assert workspace.resolve("does/not/exist.ts").parent.name == "not"
 
 
 def test_symlink_pointing_outside_is_refused(workspace, tmp_path):
@@ -56,7 +56,7 @@ def test_list_files_skips_caches_and_hidden_files(workspace):
     (workspace.root / "__pycache__" / "x.pyc").write_text("")
     (workspace.root / ".hidden").write_text("")
     files = workspace.list_files()
-    assert "calc/stats.py" in files
+    assert "src/stats.ts" in files
     assert not any("__pycache__" in f or f.startswith(".") for f in files)
 
 
@@ -166,16 +166,16 @@ def test_subset_narrows_the_visible_tools(workspace, trace):
 
 def test_read_file_numbers_lines_and_reports_missing_files(workspace, trace):
     registry = ToolRegistry(read_only_tools(workspace), trace=trace)
-    ok = registry.call("read_file", {"path": "calc/stats.py"})
+    ok = registry.call("read_file", {"path": "src/stats.ts"})
     assert ok.ok and "   1 | " in ok.content
-    missing = registry.call("read_file", {"path": "calc/nope.py"})
+    missing = registry.call("read_file", {"path": "src/nope.ts"})
     assert not missing.ok and "no such file" in missing.content
 
 
 def test_search_finds_matches_and_reports_bad_regex(workspace, trace):
     registry = ToolRegistry(read_only_tools(workspace), trace=trace)
-    hits = registry.call("search", {"pattern": r"def mean"})
-    assert hits.ok and "calc/stats.py" in hits.content
+    hits = registry.call("search", {"pattern": r"function mean"})
+    assert hits.ok and "src/stats.ts" in hits.content
     bad = registry.call("search", {"pattern": "("})
     assert not bad.ok and "invalid regular expression" in bad.content
 
@@ -184,17 +184,17 @@ def test_edit_file_requires_a_unique_match(workspace, trace):
     registry = ToolRegistry([edit_file_tool(workspace)], trace=trace)
     duplicated = registry.call(
         "edit_file",
-        {"path": "calc/stats.py", "old_text": "return float(ordered[middle])", "new_text": "x"},
+        {"path": "src/stats.ts", "old_text": "return ordered[middle]!;", "new_text": "x"},
     )
     assert not duplicated.ok and "appears 2 times" in duplicated.content
-    assert "return float(ordered[middle])" in (workspace.root / "calc/stats.py").read_text()
+    assert "return ordered[middle]!;" in (workspace.root / "src/stats.ts").read_text()
 
 
 def test_edit_file_rejects_stale_text(workspace, trace):
     registry = ToolRegistry([edit_file_tool(workspace)], trace=trace)
     outcome = registry.call(
         "edit_file",
-        {"path": "calc/stats.py", "old_text": "this text is not in the file", "new_text": "x"},
+        {"path": "src/stats.ts", "old_text": "this text is not in the file", "new_text": "x"},
     )
     assert not outcome.ok and "not found" in outcome.content
 
@@ -204,32 +204,32 @@ def test_edit_file_applies_a_unique_change(workspace, trace):
     outcome = registry.call(
         "edit_file",
         {
-            "path": "calc/stats.py",
-            "old_text": "return total / (len(values) + 1)",
-            "new_text": "return total / len(values)",
+            "path": "src/stats.ts",
+            "old_text": "return total / (values.length + 1);",
+            "new_text": "return total / values.length;",
         },
     )
     assert outcome.ok
-    assert "return total / len(values)" in (workspace.root / "calc/stats.py").read_text()
+    assert "return total / values.length;" in (workspace.root / "src/stats.ts").read_text()
 
 
 def test_write_file_is_jailed(workspace, trace):
     registry = ToolRegistry([write_file_tool(workspace)], trace=trace)
-    outcome = registry.call("write_file", {"path": "../evil.py", "content": "boom"})
+    outcome = registry.call("write_file", {"path": "../evil.ts", "content": "boom"})
     assert not outcome.ok and "refused" in outcome.content
 
 
 def test_snapshot_diff_and_restore_round_trip(workspace):
     baseline = snapshot(workspace)
-    target = workspace.root / "calc" / "stats.py"
-    target.write_text(target.read_text().replace("+ 1)", ")"))
-    (workspace.root / "new_file.py").write_text("# added\n")
+    target = workspace.root / "src" / "stats.ts"
+    target.write_text(target.read_text().replace("(values.length + 1)", "values.length"))
+    (workspace.root / "new_file.ts").write_text("// added\n")
 
-    assert changed_files(workspace, baseline) == ["calc/stats.py", "new_file.py"]
+    assert changed_files(workspace, baseline) == ["new_file.ts", "src/stats.ts"]
     diff = render_diff(workspace, baseline)
-    assert "--- a/calc/stats.py" in diff and "+++ b/new_file.py" in diff
+    assert "--- a/src/stats.ts" in diff and "+++ b/new_file.ts" in diff
 
     reverted = restore(workspace, baseline)
-    assert reverted == ["calc/stats.py", "new_file.py"]
+    assert reverted == ["new_file.ts", "src/stats.ts"]
     assert changed_files(workspace, baseline) == []
-    assert not (workspace.root / "new_file.py").exists()
+    assert not (workspace.root / "new_file.ts").exists()

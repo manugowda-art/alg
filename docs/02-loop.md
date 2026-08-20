@@ -50,8 +50,8 @@ def _evidence(self, state: LoopState) -> str | None:
     return f"{report.passed}p/{report.failed}f:{','.join(report.signature)}"
 ```
 
-The important part is that this comes from the **test runner**, not from the
-model's own account of how it is doing. That is the anti-reward-hacking property:
+The important part is that this comes from the **test runner** (`node --test`), not
+from the model's own account of how it is doing. That is the anti-reward-hacking property:
 progress must show up in something the model does not author. If evidence were
 "did the model say it fixed it", the stall detector would never fire.
 

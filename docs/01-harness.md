@@ -4,13 +4,14 @@
 
 A harness is not "the code that calls the API". It is everything that decides
 **what the model is allowed to do, what it can see, and what is recorded**. In
-this repo that is four files:
+this repo that is five files:
 
 | File | Responsibility |
 | :--- | :--- |
 | `workspace.py` | A disposable copy of the task, a path jail, a bounded command runner |
 | `tools/__init__.py` | Tool registry: schema validation, error containment, tracing |
 | `tools/*.py` | The actual capabilities: read, search, edit, patch, run tests |
+| `tasks.py` | The task manifest — what makes the harness language-agnostic |
 | `events.py` | The trace — the only output channel |
 
 ## The four properties worth building
@@ -65,8 +66,15 @@ of them are written. A half-applied patch is worse than a rejected one, because
 the model now reasons about a file state that nobody intended.
 
 **`run_tests` returns structure, not text.** `TestReport` carries counts, the
-failing node ids, and a `signature`. Loop engineering needs to compare evidence
-across iterations, and you cannot compare two walls of pytest output.
+failing test ids, and a `signature`. Loop engineering needs to compare evidence
+across iterations, and you cannot compare two walls of test output.
+
+**The runner is data, not code.** `tasks.py` reads the task's `alg.task.json` —
+test command, focus flag, source/test/search globs — and `tests_tool.py` picks a
+parser from a registry keyed by `runner`. The bundled task is TypeScript on
+`node --test`; a pytest parser ships alongside it. Adding a language means adding
+a parser, not touching the loop or the graph. This is the seam that keeps
+"what the engine does" separate from "what this task happens to be written in".
 
 **Narrow tool sets are a feature.** `ToolRegistry.subset()` exists so a phase can
 be made read-only by construction rather than by asking the model nicely.

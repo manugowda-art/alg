@@ -15,11 +15,11 @@ MAX_READ_BYTES = 40_000
 MAX_MATCHES = 100
 
 
-def read_only_tools(workspace: Workspace) -> list[Tool]:
+def read_only_tools(workspace: Workspace, search_glob: str = "**/*") -> list[Tool]:
     return [
         _list_files(workspace),
         _read_file(workspace),
-        _search(workspace),
+        _search(workspace, search_glob),
     ]
 
 
@@ -70,8 +70,9 @@ def _read_file(workspace: Workspace) -> Tool:
     )
 
 
-def _search(workspace: Workspace) -> Tool:
-    def run(pattern: str, glob: str = "**/*.py") -> ToolOutcome:
+def _search(workspace: Workspace, default_glob: str = "**/*") -> Tool:
+    def run(pattern: str, glob: str | None = None) -> ToolOutcome:
+        glob = glob or default_glob
         try:
             regex = re.compile(pattern)
         except re.error as exc:
@@ -108,7 +109,10 @@ def _search(workspace: Workspace) -> Tool:
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Python regular expression."},
-                "glob": {"type": "string", "description": "Glob to limit the search. Default `**/*.py`."},
+                "glob": {
+                    "type": "string",
+                    "description": f"Glob to limit the search. Default `{default_glob}`.",
+                },
             },
             "required": ["pattern"],
         },

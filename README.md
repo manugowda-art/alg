@@ -28,11 +28,15 @@ environment → feedback → flow.
 All three layers, built from scratch on the standard library, applied to one task
 small enough to hold in your head and complete enough to exercise every layer:
 
-> Given a Python package with a failing test suite, diagnose the defect, patch the
-> source, and prove the fix by running the tests. Do not touch the tests.
+> Given a **TypeScript** package with a failing test suite, diagnose the defect,
+> patch the source, and prove the fix by running the tests. Do not touch the tests.
 
 That task is chosen because **the feedback is free, objective, and unfakeable**.
-`pytest` decides whether the work is done, not the model.
+`node --test` decides whether the work is done, not the model.
+
+The engine is Python; the task under repair is TypeScript. Nothing in the loop or
+the graph knows either language — the task's `alg.task.json` supplies the test
+command, and a parser keyed by `runner` turns its output into a verdict.
 
 ```
              ┌─────────────── graph.py ────────────────┐
@@ -63,14 +67,18 @@ src/alg/
     __init__.py   Tool registry: schema validation, error containment, tracing.
     fs.py         list_files, read_file, search, edit_file, write_file, diff
     patch.py      Unified-diff parser and applier (forgiving offsets, strict context, atomic)
-    tests_tool.py pytest runner → structured TestReport
+    tests_tool.py Test runners → structured TestReport (node --test TAP, pytest)
   loop.py         Bounded model/tool cycle + five stop rules.
   graph.py        Node/edge executor, conditional routing, JSONL checkpoints, resume.
   agent.py        The wiring: baseline → repair → verify → report.
+  tasks.py        TaskSpec: reads alg.task.json so the engine stays language-agnostic.
   llm/            Provider-neutral interface + Anthropic and Ollama adapters.
   cli.py          alg run | graph | trace
-tasks/calc_bug/   A stats module with two seeded defects and 11 tests.
-tests/            108 tests covering all three layers, no network required.
+tasks/calc_bug/   TypeScript stats module: two seeded defects, 11 tests, zero deps.
+  alg.task.json   Test command, focus flag, source/test/search globs.
+  src/stats.ts    The code under repair.
+  test/           node:test suite — the specification, and off-limits to the agent.
+tests/            123 tests covering all three layers, no network required.
 docs/             One document per layer, plus the roadmap.
 ```
 
@@ -78,7 +86,8 @@ docs/             One document per layer, plus the roadmap.
 
 ```bash
 pip install -e '.[dev]'
-pytest                                    # 108 tests, offline
+pytest                                    # 123 tests, offline
+cd tasks/calc_bug && npm test             # see the task fail on its own
 alg graph                                 # print the topology as mermaid
 ```
 

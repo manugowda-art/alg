@@ -1,7 +1,7 @@
 # Roadmap
 
-Phase 1 is done: harness, loop, and graph built from scratch, wired into one use
-case, all exercised offline by 108 tests.
+Phase 1 is done: harness, loop, and graph built from scratch in Python, wired into
+one TypeScript use case, all exercised offline by 123 tests.
 
 ## Phase 2 — run it for real
 
@@ -17,7 +17,9 @@ Nothing here is built yet; the point of phase 1 was to make phase 2 measurable.
 3. **More tasks.** One bug per task is too easy to be informative. Add: a bug
    whose fix requires reading two files; a task where the obvious fix breaks
    another test; a task with a genuinely ambiguous spec. `tasks/` is a directory
-   because the interesting work is comparative.
+   because the interesting work is comparative — and since a task is just a
+   directory with an `alg.task.json`, a Vitest task, a Go task, or a Python task
+   costs a manifest plus (if the output format is new) one parser.
 4. **An eval harness.** N tasks × M runs → solve rate, attempts to green, tokens
    per solve, and the distribution of stop reasons. Without this, every tuning
    decision is vibes.
@@ -76,7 +78,7 @@ usable rehearsal for a real product is the shape of `tasks/`: a directory, a
 verifier that returns structure, and a definition of "solved" that the agent
 cannot fake. Before pointing this at real work, be able to answer:
 
-1. What is the automatic verifier? (Here: pytest. If there is no verifier, loop
+1. What is the automatic verifier? (Here: `node --test`. If there is no verifier, loop
    engineering has nothing to close over and you are back to one-shot prompting.)
 2. What is the blast radius of a wrong action, and what is the undo?
 3. What does the eval set look like, and how will you know a change to the prompt

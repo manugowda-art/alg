@@ -1,0 +1,12 @@
+{
+  "name": "calc_bug",
+  "language": "TypeScript",
+  "description": "A statistics module with two seeded defects and 11 tests.",
+  "runner": "node-test",
+  "test_command": ["node", "--test", "--test-reporter=tap"],
+  "focus_template": ["--test-name-pattern", "{target}"],
+  "focus_hint": "a test-name pattern, e.g. \"median\"",
+  "source_glob": "src/**/*.ts",
+  "test_glob": "test/**/*.ts",
+  "search_glob": "**/*.ts"
+}

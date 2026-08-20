@@ -14,6 +14,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# Never copied into a workspace and never listed to the model: build output and
+# dependency trees are large, uninteresting, and regenerable.
+IGNORED = (
+    "__pycache__",
+    "*.pyc",
+    ".pytest_cache",
+    "node_modules",
+    "dist",
+    "coverage",
+    ".git",
+)
+
+
 class WorkspaceError(Exception):
     """Raised when a requested path escapes the workspace."""
 
@@ -48,7 +61,7 @@ class Workspace:
         shutil.copytree(
             source,
             dest,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+            ignore=shutil.ignore_patterns(*IGNORED),
         )
         return cls(dest)
 
@@ -78,7 +91,7 @@ class Workspace:
                 continue
             rel = self.relative(path)
             parts = Path(rel).parts
-            if any(p in {"__pycache__", ".pytest_cache"} for p in parts):
+            if any(p in {"__pycache__", ".pytest_cache", "node_modules", "dist"} for p in parts):
                 continue
             if not include_hidden and any(p.startswith(".") for p in parts):
                 continue

@@ -14,6 +14,7 @@ import pytest
 
 from alg.events import Trace
 from alg.llm.base import Completion, Message, TextBlock, ToolCall, ToolSpec, Usage
+from alg.tasks import TaskSpec
 from alg.workspace import Workspace
 
 TASKS = Path(__file__).resolve().parents[1] / "tasks"
@@ -77,10 +78,19 @@ def workspace(tmp_path: Path, task_dir: Path) -> Workspace:
     return Workspace.materialize(task_dir, tmp_path / "work")
 
 
-MEAN_BUG = "return total / (len(values) + 1)"
-MEAN_FIX = "return total / len(values)"
-MEDIAN_BUG = "        return float(ordered[middle])\n    return float(ordered[middle])"
+@pytest.fixture
+def task(task_dir: Path) -> TaskSpec:
+    return TaskSpec.load(task_dir)
+
+
+# The seeded defects in tasks/calc_bug/src/stats.ts, and their fixes. Kept here
+# so a change to the task shows up as one diff rather than scattered literals.
+SOURCE = "src/stats.ts"
+
+MEAN_BUG = "return total / (values.length + 1);"
+MEAN_FIX = "return total / values.length;"
+MEDIAN_BUG = "    return ordered[middle]!;\n  }\n  return ordered[middle]!;"
 MEDIAN_FIX = (
-    "        return float(ordered[middle])\n"
-    "    return (ordered[middle - 1] + ordered[middle]) / 2"
+    "    return ordered[middle]!;\n  }\n"
+    "  return (ordered[middle - 1]! + ordered[middle]!) / 2;"
 )

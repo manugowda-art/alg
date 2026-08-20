@@ -5,4 +5,6 @@ __pycache__/
 build/
 dist/
 runs/
+node_modules/
+coverage/
 .venv/
